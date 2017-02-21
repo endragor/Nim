@@ -131,6 +131,10 @@ proc fail*[T](future: Future[T], error: ref Exception) =
     #raise error
     discard
 
+import deques
+var pendingCbs {.threadvar.}: ref Deque[FutureBase]
+var isInCb {.threadvar.}: bool
+
 proc `callback=`*(future: FutureBase, cb: proc () {.closure,gcsafe.}) =
   ## Sets the callback proc to be called when the future completes.
   ##
@@ -138,9 +142,20 @@ proc `callback=`*(future: FutureBase, cb: proc () {.closure,gcsafe.}) =
   ##
   ## **Note**: You most likely want the other ``callback`` setter which
   ## passes ``future`` as a param to the callback.
+  if pendingCbs == nil:
+    new(pendingCbs)
+    pendingCbs[] = initDeque[FutureBase]()
+
   future.cb = cb
+
   if future.finished:
-    callSoon(future.cb)
+    pendingCbs[].addLast(future)
+    if isInCb: return
+    isInCb = true
+    while pendingCbs[].len > 0:
+      let fut = pendingCbs[].popFirst()
+      fut.cb()
+    isInCb = false
 
 proc `callback=`*[T](future: Future[T],
     cb: proc (future: Future[T]) {.closure,gcsafe.}) =
