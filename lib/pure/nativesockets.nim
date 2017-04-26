@@ -52,9 +52,11 @@ type
   Domain* = enum    ## domain, which specifies the protocol family of the
                     ## created socket. Other domains than those that are listed
                     ## here are unsupported.
-    AF_UNIX,        ## for local socket (using a file). Unsupported on Windows.
+    AF_UNSPEC = 0,  ## unspecified domain (can be detected automatically by
+                    ## some procedures, such as getaddrinfo)
+    AF_UNIX = 1,    ## for local socket (using a file). Unsupported on Windows.
     AF_INET = 2,    ## for network protocol IPv4 or
-    AF_INET6 = 23   ## for network protocol IPv6.
+    AF_INET6 = when defined(macosx): 30 else: 23   ## for network protocol IPv6.
 
   SockType* = enum     ## second argument to `socket` proc
     SOCK_STREAM = 1,   ## reliable stream-oriented service or Stream Sockets
