@@ -669,7 +669,7 @@ proc close*(socket: Socket) =
   ## Closes a socket.
   try:
     when defineSsl:
-      if socket.isSSL:
+      if socket.isSSL and socket.sslHandle != nil:
         ErrClearError()
         # As we are closing the underlying socket immediately afterwards,
         # it is valid, under the TLS standard, to perform a unidirectional

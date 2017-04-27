@@ -1039,18 +1039,16 @@ proc connectWithDomainOrRaise(client: HttpClient | AsyncHttpClient,
 
   when defined(ssl):
     if isSsl:
-      # defined(ssl) is just checked to avoid compile-time error.
-      # the necessary check has already been done
       client.sslContext.wrapSocket(client.socket)
 
   try:
     await client.socket.connect(hostname, port)
   except:
     client.socket.close()
-    raise
+    raise getCurrentException()
 
-proc dial(client: HttpClient | AsyncHttpClient, hostname: string,
-          port: Port, isSsl: bool) {.multisync.}=
+proc doConnect(client: HttpClient | AsyncHttpClient, hostname: string,
+               port: Port, isSsl: bool) {.multisync.}=
   if isSsl and not defined(ssl):
     raise newException(HttpRequestError,
       "SSL support is not available. Cannot connect over SSL.")
@@ -1061,26 +1059,24 @@ proc dial(client: HttpClient | AsyncHttpClient, hostname: string,
   let addrInfo = getAddrInfo(hostname, port, AF_UNSPEC)
   var next = addrInfo
   while next != nil:
-    isv4Possible = next[].ai_family == AF_INET.toInt()
-    isv6Possible = next[].ai_family == AF_INET6.toInt()
+    isv4Possible = isv4Possible or next[].ai_family == AF_INET.toInt()
+    isv6Possible = isv6Possible or next[].ai_family == AF_INET6.toInt()
+    if isv4Possible and isv6Possible: break
     next = next[].ai_next
   freeAddrInfo(addrInfo)
 
   if not isv4Possible and not isv6Possible:
     raise newException(IOError, "Couldn't resolve hostname via IPv4 or IPv6")
 
+  var success = false
   if isv6Possible:
-    var failure = false
     try:
       await connectWithDomainOrRaise(client, hostname, port, isSsl, AF_INET6)
+      success = true
     except:
       if not isv4Possible:
-        raise
-      failure = true
-
-    if failure:
-      await connectWithDomainOrRaise(client, hostname, port, isSsl, AF_INET)
-  else:
+        raise getCurrentException()
+  if not success:
     await connectWithDomainOrRaise(client, hostname, port, isSsl, AF_INET)
 
 proc newConnection(client: HttpClient | AsyncHttpClient,
@@ -1091,17 +1087,18 @@ proc newConnection(client: HttpClient | AsyncHttpClient,
     if client.connected:
       client.close()
 
+    let isSsl = url.scheme.toLowerAscii() == "https"
+
     # TODO: I should be able to write 'net.Port' here...
     let port =
       if url.port == "":
-        if url.scheme.toLowerAscii() == "https":
+        if isSsl:
           nativesockets.Port(443)
         else:
           nativesockets.Port(80)
       else: nativesockets.Port(url.port.parseInt)
 
-    let isSsl = url.scheme.toLowerAscii() == "https"
-    await dial(client, url.hostname, port, isSsl)
+    await doConnect(client, url.hostname, port, isSsl)
 
     client.currentURL = url
     client.connected = true
