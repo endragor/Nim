@@ -127,10 +127,10 @@ proc toInt*(p: Protocol): cint
 when not useWinVersion:
   proc toInt(domain: Domain): cshort =
     case domain
+    of AF_UNSPEC:      result = posix.AF_UNSPEC.cshort
     of AF_UNIX:        result = posix.AF_UNIX.cshort
     of AF_INET:        result = posix.AF_INET.cshort
     of AF_INET6:       result = posix.AF_INET6.cshort
-    else: discard
 
   proc toInt(typ: SockType): cint =
     case typ
@@ -138,7 +138,6 @@ when not useWinVersion:
     of SOCK_DGRAM:     result = posix.SOCK_DGRAM
     of SOCK_SEQPACKET: result = posix.SOCK_SEQPACKET
     of SOCK_RAW:       result = posix.SOCK_RAW
-    else: discard
 
   proc toInt(p: Protocol): cint =
     case p
@@ -148,7 +147,6 @@ when not useWinVersion:
     of IPPROTO_IPV6:   result = posix.IPPROTO_IPV6
     of IPPROTO_RAW:    result = posix.IPPROTO_RAW
     of IPPROTO_ICMP:   result = posix.IPPROTO_ICMP
-    else: discard
 
 else:
   proc toInt(domain: Domain): cshort =
@@ -160,6 +158,14 @@ else:
   proc toInt(p: Protocol): cint =
     result = cint(ord(p))
 
+proc toSockType*(protocol: Protocol): SockType =
+  result = case protocol
+  of IPPROTO_TCP:
+    SOCK_STREAM
+  of IPPROTO_UDP:
+    SOCK_DGRAM
+  of IPPROTO_IP, IPPROTO_IPV6, IPPROTO_RAW, IPPROTO_ICMP:
+    SOCK_RAW
 
 proc newNativeSocket*(domain: Domain = AF_INET,
                       sockType: SockType = SOCK_STREAM,

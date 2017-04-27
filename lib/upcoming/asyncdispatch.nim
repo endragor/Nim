@@ -1331,12 +1331,13 @@ else:
     # Callback queue processing
     processPendingCallbacks(p)
 
-  proc connect*(socket: AsyncFD, address: string, port: Port,
-    domain = AF_INET): Future[void] =
-    var retFuture = newFuture[void]("connect")
+  proc doConnect(socket: AsyncFD, addrInfo: ptr AddrInfo): Future[void] =
+    let retFuture = newFuture[void]("doConnect")
+    result = retFuture
 
     proc cb(fd: AsyncFD): bool =
-      var ret = SocketHandle(fd).getSockOptInt(cint(SOL_SOCKET), cint(SO_ERROR))
+      let ret = SocketHandle(fd).getSockOptInt(
+        cint(SOL_SOCKET), cint(SO_ERROR))
       if ret == 0:
           # We have connected.
           retFuture.complete()
@@ -1348,32 +1349,92 @@ else:
           retFuture.fail(newException(OSError, osErrorMsg(OSErrorCode(ret))))
           return true
 
-    assert getSockDomain(socket.SocketHandle) == domain
-    var aiList = getAddrInfo(address, port, domain)
-    var success = false
-    var lastError: OSErrorCode
-    var it = aiList
-    while it != nil:
-      var ret = connect(socket.SocketHandle, it.ai_addr, it.ai_addrlen.Socklen)
-      if ret == 0:
-        # Request to connect completed immediately.
-        success = true
-        retFuture.complete()
-        break
+    let ret = connect(socket.SocketHandle,
+                      addrInfo.ai_addr,
+                      addrInfo.ai_addrlen.Socklen)
+    if ret == 0:
+      # Request to connect completed immediately.
+      retFuture.complete()
+    else:
+      let lastError = osLastError()
+      if lastError.int32 == EINTR or lastError.int32 == EINPROGRESS:
+        addWrite(socket, cb)
       else:
-        lastError = osLastError()
-        if lastError.int32 == EINTR or lastError.int32 == EINPROGRESS:
-          success = true
-          addWrite(socket, cb)
-          break
-        else:
-          success = false
-      it = it.ai_next
+        retFuture.fail(newException(OSError, osErrorMsg(lastError)))
 
-    freeAddrInfo(aiList)
-    if not success:
-      retFuture.fail(newException(OSError, osErrorMsg(lastError)))
-    return retFuture
+  template asyncAddrInfoLoop(addrInfo: ptr AddrInfo, fd: untyped,
+                             protocol: Protocol = IPPROTO_RAW) =
+    ## Iterates through the AddrInfo linked list asynchronously
+    ## until the connection can be established.
+    const shouldCreateFd = not declared(fd)
+
+    when shouldCreateFd:
+      let sockType = protocol.toSockType()
+
+    var lastException: ref Exception
+    var curAddrInfo = addrInfo
+    when shouldCreateFd:
+      var curFd: AsyncFD
+    else:
+      var curFd = fd
+    proc tryNextAddrInfo(fut: Future[void]) {.gcsafe.} =
+      if fut == nil or fut.failed:
+        if fut != nil:
+          lastException = fut.readError()
+          when shouldCreateFd:
+            curFd.closeSocket()
+
+        var domain: Domain
+        while curAddrInfo != nil:
+          try:
+            domain = Domain(curAddrInfo.ai_family)
+            break
+          except RangeError:
+            # unknown family
+            curAddrInfo = curAddrInfo.ai_next
+
+        if curAddrInfo == nil:
+          freeAddrInfo(addrInfo)
+          if lastException != nil:
+            retFuture.fail(lastException)
+          else:
+            retFuture.fail(newException(
+              IOError, "Couldn't resolve hostname: " & address))
+          return
+
+        when shouldCreateFd:
+          curFd = newAsyncNativeSocket(domain, sockType, protocol)
+        doConnect(curFd, curAddrInfo).callback = tryNextAddrInfo
+        curAddrInfo = curAddrInfo.ai_next
+      else:
+        freeAddrInfo(addrInfo)
+        when shouldCreateFd:
+          retFuture.complete(curFd)
+        else:
+          retFuture.complete()
+
+    tryNextAddrInfo(nil)
+
+  proc dial*(address: string, port: Port,
+             protocol: Protocol = IPPROTO_TCP): Future[AsyncFD] =
+    ## Establishes connection to the specified address:port pair via the
+    ## specified protocol.
+    ## Returns the async file descriptor, registered in the local dispatcher.
+    let retFuture = newFuture[AsyncFD]("dial")
+    result = retFuture
+    let sockType = protocol.toSockType()
+
+    let aiList = getAddrInfo(address, port, AF_UNSPEC, sockType, protocol)
+    asyncAddrInfoLoop(aiList, noFD, protocol)
+
+  proc connect*(socket: AsyncFD, address: string, port: Port,
+      domain = AF_INET): Future[void] =
+    let retFuture = newFuture[void]("connect")
+    result = retFuture
+
+    assert getSockDomain(socket.SocketHandle) == domain
+    let aiList = getAddrInfo(address, port, domain)
+    asyncAddrInfoLoop(aiList, socket)
 
   proc recv*(socket: AsyncFD, size: int,
              flags = {SocketFlag.SafeDisconn}): Future[string] =
