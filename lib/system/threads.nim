@@ -168,8 +168,8 @@ else:
 
   {.passC: "-pthread".}
   const
-    schedh = "#define _GNU_SOURCE\n#include <sched.h>"
-    pthreadh = "#define _GNU_SOURCE\n#include <pthread.h>"
+    schedh = "#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n#include <sched.h>"
+    pthreadh = "#ifndef _GNU_SOURCE\n#define _GNU_SOURCE\n#endif\n#include <pthread.h>"
 
   when not declared(Time):
     when defined(linux):
